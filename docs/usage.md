@@ -246,6 +246,23 @@ Run with:
 GOCACHE=/tmp/go-build-cache
 ```
 
+### “How do I type-check geppetto + pinocchio together?”
+
+If your workspace has `oak-git-db/`, `geppetto/`, and `pinocchio/` as siblings, use the helper script:
+
+```bash
+cd oak-git-db
+bash scripts/typecheck-geppetto-pinocchio.sh
+```
+
+This runs a compile-only `go test` across both module roots in one invocation (workspace mode), which helps ensure `go/packages`-based analysis for each repo is using the local workspace wiring.
+
+If vet is too noisy while you’re just trying to compile:
+
+```bash
+VET=off bash scripts/typecheck-geppetto-pinocchio.sh
+```
+
 ### “I passed a directory to oak and got no JSON”
 
 Known sharp edge:

@@ -53,3 +53,17 @@ sqlite3 -readonly /tmp/pr.db "select change_type,count(*) from pr_file group by 
 - `docs/usage.md`
 - `docs/implementation.md`
 - `docs/design.md`
+
+## Workspace type-check (geppetto + pinocchio)
+
+In a workspace where `geppetto/` and `pinocchio/` are siblings of this repo, run:
+
+```bash
+bash scripts/typecheck-geppetto-pinocchio.sh
+```
+
+If you only want compilation/type-checking and want to reduce noise:
+
+```bash
+VET=off bash scripts/typecheck-geppetto-pinocchio.sh
+```
