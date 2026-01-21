@@ -175,7 +175,8 @@ CREATE TABLE pr (
 );
 
 CREATE TABLE git_commit (
-  sha TEXT PRIMARY KEY,
+  repo_id INTEGER NOT NULL,
+  sha TEXT NOT NULL,
   parents TEXT,
   author_name TEXT,
   author_email TEXT,
@@ -184,21 +185,27 @@ CREATE TABLE git_commit (
   committer_email TEXT,
   committed_at TEXT,
   subject TEXT,
-  body TEXT
+  body TEXT,
+  PRIMARY KEY (repo_id, sha),
+  FOREIGN KEY(repo_id) REFERENCES repo(id)
 );
 
 CREATE TABLE pr_commit (
   pr_id INTEGER NOT NULL,
+  repo_id INTEGER NOT NULL,
   sha TEXT NOT NULL,
   ord INTEGER NOT NULL,            -- 0..N in topo/chronological order
   PRIMARY KEY (pr_id, sha),
   FOREIGN KEY(pr_id) REFERENCES pr(id),
-  FOREIGN KEY(sha) REFERENCES git_commit(sha)
+  FOREIGN KEY(repo_id, sha) REFERENCES git_commit(repo_id, sha)
 );
 
 CREATE TABLE path (
   id INTEGER PRIMARY KEY,
-  path TEXT UNIQUE NOT NULL
+  repo_id INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  FOREIGN KEY(repo_id) REFERENCES repo(id),
+  UNIQUE(repo_id, path)
 );
 
 CREATE TABLE pr_file (

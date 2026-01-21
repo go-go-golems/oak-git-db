@@ -30,6 +30,7 @@ func newRootCmd() *cobra.Command {
 		Use:   "build",
 		Short: "Build a sqlite database for PR vs origin/main",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.RepoDirs = splitCSV(opts.RepoDirs)
 			opts.OakSources = splitCSV(opts.OakSources)
 			opts.OakGlob = splitCSV(opts.OakGlob)
 			opts.GoPackages = splitCSV(opts.GoPackages)
@@ -41,7 +42,7 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 
-	buildCmd.Flags().StringVar(&opts.RepoDir, "repo", ".", "Repo directory (geppetto worktree)")
+	buildCmd.Flags().StringSliceVar(&opts.RepoDirs, "repo", []string{"."}, "Repeatable repo root (e.g. --repo ../geppetto --repo ../pinocchio)")
 	buildCmd.Flags().StringVar(&opts.BaseRef, "base", "origin/main", "Base ref (merge-base is computed against head)")
 	buildCmd.Flags().StringVar(&opts.HeadRef, "head", "HEAD", "Head ref")
 	buildCmd.Flags().StringVar(&opts.OutPath, "out", "", "Output sqlite db path")

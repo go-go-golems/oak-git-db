@@ -23,7 +23,7 @@ import (
 )
 
 type BuildOptions struct {
-	RepoDir string
+	RepoDirs []string
 	BaseRef string
 	HeadRef string
 	OutPath string
@@ -37,8 +37,8 @@ type BuildOptions struct {
 }
 
 func Build(ctx context.Context, opts BuildOptions) error {
-	if opts.RepoDir == "" {
-		return errors.New("RepoDir is required")
+	if len(opts.RepoDirs) == 0 {
+		return errors.New("at least one RepoDir is required")
 	}
 	if opts.BaseRef == "" {
 		opts.BaseRef = "origin/main"
@@ -59,22 +59,6 @@ func Build(ctx context.Context, opts BuildOptions) error {
 		opts.GoPackages = []string{"./..."}
 	}
 
-	repoDir, err := filepath.Abs(opts.RepoDir)
-	if err != nil {
-		return errors.Wrap(err, "abs repo dir")
-	}
-
-	headSHA, err := gitString(ctx, repoDir, "rev-parse", opts.HeadRef)
-	if err != nil {
-		return errors.Wrap(err, "resolve head ref")
-	}
-	baseSHA, err := gitString(ctx, repoDir, "merge-base", opts.BaseRef, headSHA)
-	if err != nil {
-		return errors.Wrap(err, "resolve merge-base")
-	}
-
-	originURL, _ := gitString(ctx, repoDir, "remote", "get-url", "origin")
-
 	db, err := sql.Open("sqlite3", opts.OutPath)
 	if err != nil {
 		return errors.Wrap(err, "open sqlite db")
@@ -89,38 +73,61 @@ func Build(ctx context.Context, opts BuildOptions) error {
 	}
 
 	now := time.Now().Format(time.RFC3339)
-	repoID, err := insertRepo(ctx, db, "geppetto", repoDir, originURL, now)
-	if err != nil {
-		return err
-	}
+	for _, repo := range opts.RepoDirs {
+		repo = strings.TrimSpace(repo)
+		if repo == "" {
+			continue
+		}
+		repoDir, err := filepath.Abs(repo)
+		if err != nil {
+			return errors.Wrap(err, "abs repo dir")
+		}
 
-	baseSnapshotID, err := insertSnapshot(ctx, db, repoID, "base", opts.BaseRef, baseSHA, now)
-	if err != nil {
-		return err
-	}
-	headSnapshotID, err := insertSnapshot(ctx, db, repoID, "head", opts.HeadRef, headSHA, now)
-	if err != nil {
-		return err
-	}
+		headSHA, err := gitString(ctx, repoDir, "rev-parse", opts.HeadRef)
+		if err != nil {
+			return errors.Wrapf(err, "resolve head ref (repo=%s)", repoDir)
+		}
+		baseSHA, err := gitString(ctx, repoDir, "merge-base", opts.BaseRef, headSHA)
+		if err != nil {
+			return errors.Wrapf(err, "resolve merge-base (repo=%s)", repoDir)
+		}
 
-	prID, err := insertPR(ctx, db, repoID, baseSnapshotID, headSnapshotID, baseSHA, opts.BaseRef, opts.HeadRef, now)
-	if err != nil {
-		return err
-	}
+		originURL, _ := gitString(ctx, repoDir, "remote", "get-url", "origin")
+		repoName := filepath.Base(repoDir)
 
-	if err := ingestGitPR(ctx, db, repoDir, prID, baseSHA, headSHA); err != nil {
-		return err
-	}
+		repoID, err := insertRepo(ctx, db, repoName, repoDir, originURL, now)
+		if err != nil {
+			return err
+		}
 
-	if err := ingestOakSnapshot(ctx, db, repoDir, baseSnapshotID, baseSHA, opts.OakSources, opts.OakGlob, opts.OakWithBody); err != nil {
-		return err
-	}
-	if err := ingestOakSnapshot(ctx, db, repoDir, headSnapshotID, headSHA, opts.OakSources, opts.OakGlob, opts.OakWithBody); err != nil {
-		return err
-	}
+		baseSnapshotID, err := insertSnapshot(ctx, db, repoID, "base", opts.BaseRef, baseSHA, now)
+		if err != nil {
+			return err
+		}
+		headSnapshotID, err := insertSnapshot(ctx, db, repoID, "head", opts.HeadRef, headSHA, now)
+		if err != nil {
+			return err
+		}
 
-	if err := ingestGoSnapshot(ctx, db, repoDir, headSnapshotID, opts.GoPackages, opts.IncludeExternal); err != nil {
-		return err
+		prID, err := insertPR(ctx, db, repoID, baseSnapshotID, headSnapshotID, baseSHA, opts.BaseRef, opts.HeadRef, now)
+		if err != nil {
+			return err
+		}
+
+		if err := ingestGitPR(ctx, db, repoDir, repoID, prID, baseSHA, headSHA); err != nil {
+			return err
+		}
+
+		if err := ingestOakSnapshot(ctx, db, repoDir, repoID, baseSnapshotID, baseSHA, opts.OakSources, opts.OakGlob, opts.OakWithBody); err != nil {
+			return err
+		}
+		if err := ingestOakSnapshot(ctx, db, repoDir, repoID, headSnapshotID, headSHA, opts.OakSources, opts.OakGlob, opts.OakWithBody); err != nil {
+			return err
+		}
+
+		if err := ingestGoSnapshot(ctx, db, repoDir, repoID, headSnapshotID, opts.GoPackages, opts.IncludeExternal); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -148,7 +155,7 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS repo (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
-  root_path TEXT NOT NULL,
+  root_path TEXT NOT NULL UNIQUE,
   remote_origin TEXT,
   created_at TEXT NOT NULL
 );
@@ -181,7 +188,8 @@ CREATE TABLE IF NOT EXISTS pr (
 );
 
 CREATE TABLE IF NOT EXISTS git_commit (
-  sha TEXT PRIMARY KEY,
+  repo_id INTEGER NOT NULL,
+  sha TEXT NOT NULL,
   parents TEXT,
   author_name TEXT,
   author_email TEXT,
@@ -190,21 +198,27 @@ CREATE TABLE IF NOT EXISTS git_commit (
   committer_email TEXT,
   committed_at TEXT,
   subject TEXT,
-  body TEXT
+  body TEXT,
+  PRIMARY KEY (repo_id, sha),
+  FOREIGN KEY(repo_id) REFERENCES repo(id)
 );
 
 CREATE TABLE IF NOT EXISTS pr_commit (
   pr_id INTEGER NOT NULL,
+  repo_id INTEGER NOT NULL,
   sha TEXT NOT NULL,
   ord INTEGER NOT NULL,
   PRIMARY KEY (pr_id, sha),
   FOREIGN KEY(pr_id) REFERENCES pr(id),
-  FOREIGN KEY(sha) REFERENCES git_commit(sha)
+  FOREIGN KEY(repo_id, sha) REFERENCES git_commit(repo_id, sha)
 );
 
 CREATE TABLE IF NOT EXISTS path (
   id INTEGER PRIMARY KEY,
-  path TEXT UNIQUE NOT NULL
+  repo_id INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  FOREIGN KEY(repo_id) REFERENCES repo(id),
+  UNIQUE(repo_id, path)
 );
 
 CREATE TABLE IF NOT EXISTS pr_file (
@@ -292,7 +306,14 @@ func createSchema(db *sql.DB) error {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		return errors.Wrap(err, "create schema")
 	}
-	if _, err := db.Exec(`INSERT OR REPLACE INTO meta(key,value) VALUES ('schema_version','1');`); err != nil {
+
+	var existing string
+	err := db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&existing)
+	if err == nil && existing != "" && existing != "2" {
+		return errors.Errorf("incompatible schema_version=%s (expected 2); delete the DB and rebuild", existing)
+	}
+
+	if _, err := db.Exec(`INSERT OR REPLACE INTO meta(key,value) VALUES ('schema_version','2');`); err != nil {
 		return errors.Wrap(err, "set schema_version")
 	}
 	return nil
@@ -323,7 +344,7 @@ func insertPR(ctx context.Context, db *sql.DB, repoID, baseSnapshotID, headSnaps
 	return res.LastInsertId()
 }
 
-func ingestGitPR(ctx context.Context, db *sql.DB, repoDir string, prID int64, baseSHA, headSHA string) error {
+func ingestGitPR(ctx context.Context, db *sql.DB, repoDir string, repoID, prID int64, baseSHA, headSHA string) error {
 	// Commits in range.
 	commitsRaw, err := gitBytes(ctx, repoDir, "log", "--reverse", "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%s%x00%b%x00", baseSHA+".."+headSHA)
 	if err != nil {
@@ -368,23 +389,23 @@ func ingestGitPR(ctx context.Context, db *sql.DB, repoDir string, prID int64, ba
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	commitStmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO git_commit(sha,parents,author_name,author_email,authored_at,committer_name,committer_email,committed_at,subject,body) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+	commitStmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO git_commit(repo_id,sha,parents,author_name,author_email,authored_at,committer_name,committer_email,committed_at,subject,body) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return errors.Wrap(err, "prepare git_commit")
 	}
 	defer commitStmt.Close()
 
-	prCommitStmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO pr_commit(pr_id,sha,ord) VALUES (?,?,?)`)
+	prCommitStmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO pr_commit(pr_id,repo_id,sha,ord) VALUES (?,?,?,?)`)
 	if err != nil {
 		return errors.Wrap(err, "prepare pr_commit")
 	}
 	defer prCommitStmt.Close()
 
 	for i, r := range rows {
-		if _, err := commitStmt.ExecContext(ctx, r.SHA, r.Parents, r.AuthorName, r.AuthorEmail, r.AuthoredAt, r.CommitName, r.CommitEmail, r.CommittedAt, r.Subject, r.Body); err != nil {
+		if _, err := commitStmt.ExecContext(ctx, repoID, r.SHA, r.Parents, r.AuthorName, r.AuthorEmail, r.AuthoredAt, r.CommitName, r.CommitEmail, r.CommittedAt, r.Subject, r.Body); err != nil {
 			return errors.Wrap(err, "insert git_commit")
 		}
-		if _, err := prCommitStmt.ExecContext(ctx, prID, r.SHA, i); err != nil {
+		if _, err := prCommitStmt.ExecContext(ctx, prID, repoID, r.SHA, i); err != nil {
 			return errors.Wrap(err, "insert pr_commit")
 		}
 	}
@@ -406,13 +427,13 @@ func ingestGitPR(ctx context.Context, db *sql.DB, repoDir string, prID int64, ba
 	defer prFileStmt.Close()
 
 	for _, e := range statusEntries {
-		pathID, err := getOrCreatePathID(ctx, tx, e.Path)
+		pathID, err := getOrCreatePathID(ctx, tx, repoID, e.Path)
 		if err != nil {
 			return err
 		}
 		var oldID any = nil
 		if e.OldPath != "" {
-			oid, err := getOrCreatePathID(ctx, tx, e.OldPath)
+			oid, err := getOrCreatePathID(ctx, tx, repoID, e.OldPath)
 			if err != nil {
 				return err
 			}
@@ -433,12 +454,12 @@ func ingestGitPR(ctx context.Context, db *sql.DB, repoDir string, prID int64, ba
 	return nil
 }
 
-func getOrCreatePathID(ctx context.Context, q querier, path string) (int64, error) {
+func getOrCreatePathID(ctx context.Context, q querier, repoID int64, path string) (int64, error) {
 	var id int64
-	if err := q.QueryRowContext(ctx, `SELECT id FROM path WHERE path=?`, path).Scan(&id); err == nil {
+	if err := q.QueryRowContext(ctx, `SELECT id FROM path WHERE repo_id=? AND path=?`, repoID, path).Scan(&id); err == nil {
 		return id, nil
 	}
-	res, err := q.ExecContext(ctx, `INSERT INTO path(path) VALUES (?)`, path)
+	res, err := q.ExecContext(ctx, `INSERT INTO path(repo_id,path) VALUES (?,?)`, repoID, path)
 	if err != nil {
 		return 0, errors.Wrap(err, "insert path")
 	}
@@ -502,7 +523,7 @@ func parseNameStatusZ(b []byte) ([]nameStatusEntry, error) {
 	return out, nil
 }
 
-func ingestOakSnapshot(ctx context.Context, db *sql.DB, repoDir string, snapshotID int64, sha string, sources []string, globs []string, withBody bool) error {
+func ingestOakSnapshot(ctx context.Context, db *sql.DB, repoDir string, repoID, snapshotID int64, sha string, sources []string, globs []string, withBody bool) error {
 	// Extract snapshot to a temp dir for stable analysis.
 	tmpDir, err := os.MkdirTemp("", "oakgitdb-oak-"+sha[:8]+"-")
 	if err != nil {
@@ -532,7 +553,7 @@ func ingestOakSnapshot(ctx context.Context, db *sql.DB, repoDir string, snapshot
 	defer stmt.Close()
 
 	for _, m := range oakMatches {
-		pathID, err := getOrCreatePathID(ctx, tx, filepath.ToSlash(m.File))
+		pathID, err := getOrCreatePathID(ctx, tx, repoID, filepath.ToSlash(m.File))
 		if err != nil {
 			return err
 		}
@@ -613,7 +634,7 @@ func truncate(s string, n int) string {
 	return s[:n] + "...(truncated)"
 }
 
-func ingestGoSnapshot(ctx context.Context, db *sql.DB, repoDir string, snapshotID int64, patterns []string, includeExternal bool) error {
+func ingestGoSnapshot(ctx context.Context, db *sql.DB, repoDir string, repoID, snapshotID int64, patterns []string, includeExternal bool) error {
 	modulePath, err := readModulePath(filepath.Join(repoDir, "go.mod"))
 	if err != nil {
 		return errors.Wrap(err, "read module path")
@@ -660,7 +681,7 @@ func ingestGoSnapshot(ctx context.Context, db *sql.DB, repoDir string, snapshotI
 
 		var pathID any = nil
 		if sym.Path != "" {
-			pid, err := getOrCreatePathID(ctx, tx, sym.Path)
+			pid, err := getOrCreatePathID(ctx, tx, repoID, sym.Path)
 			if err != nil {
 				return 0, err
 			}
@@ -780,7 +801,7 @@ func ingestGoSnapshot(ctx context.Context, db *sql.DB, repoDir string, snapshotI
 							pos := pkg.Fset.Position(node.Lparen)
 							var pathID any = nil
 							if rel, ok := relPath(repoDir, pos.Filename); ok {
-								pid, err := getOrCreatePathID(ctx, tx, rel)
+								pid, err := getOrCreatePathID(ctx, tx, repoID, rel)
 								if err != nil {
 									return false
 								}

@@ -67,16 +67,29 @@ sqlite3 -readonly "$DB" "select id,name,ref,substr(sha,1,7) as sha7 from snapsho
 
 ### Common queries (copy/paste)
 
-Use `pr_id=1` for now (current builder creates a single PR row).
+The DB can contain multiple repos, and therefore multiple `pr` rows (one per repo). Start by listing them and picking a `pr_id`.
+
+#### List PRs in this DB (pick a `pr_id`)
+
+```bash
+sqlite3 -readonly "$DB" <<'SQL'
+SELECT pr.id AS pr_id, r.name AS repo, r.root_path, pr.base_ref, pr.head_ref,
+       substr(pr.merge_base_sha,1,7) AS merge_base7
+FROM pr
+JOIN repo r ON r.id = pr.repo_id
+ORDER BY pr.id;
+SQL
+```
 
 #### What commits are in the PR range?
 
 ```bash
-sqlite3 -readonly "$DB" <<'SQL'
+PRID=1
+sqlite3 -readonly "$DB" <<SQL
 SELECT pc.ord, substr(c.sha,1,7) AS sha7, c.committed_at, c.subject
 FROM pr_commit pc
-JOIN git_commit c ON c.sha = pc.sha
-WHERE pc.pr_id = 1
+JOIN git_commit c ON c.repo_id = pc.repo_id AND c.sha = pc.sha
+WHERE pc.pr_id = $PRID
 ORDER BY pc.ord;
 SQL
 ```
@@ -84,12 +97,13 @@ SQL
 #### What files changed (and how)?
 
 ```bash
-sqlite3 -readonly "$DB" <<'SQL'
+PRID=1
+sqlite3 -readonly "$DB" <<SQL
 SELECT p.path, pf.change_type, old.path AS old_path, pf.rename_score
 FROM pr_file pf
 JOIN path p ON p.id = pf.path_id
 LEFT JOIN path old ON old.id = pf.old_path_id
-WHERE pf.pr_id = 1
+WHERE pf.pr_id = $PRID
 ORDER BY pf.change_type, p.path;
 SQL
 ```
@@ -108,8 +122,9 @@ SQL
 #### Find a symbol by name (head snapshot)
 
 ```bash
-sqlite3 -readonly "$DB" <<'SQL'
-WITH head AS (SELECT head_snapshot_id AS sid FROM pr WHERE id=1)
+PRID=1
+sqlite3 -readonly "$DB" <<SQL
+WITH head AS (SELECT head_snapshot_id AS sid FROM pr WHERE id=$PRID)
 SELECT gs.symbol_key, gs.kind, gs.pkg_path, gs.recv, p.path, gs.start_line, gs.start_col
 FROM go_symbol gs
 LEFT JOIN path p ON p.id = gs.path_id
@@ -125,8 +140,9 @@ SQL
 1) First, look up the `symbol_key`:
 
 ```bash
-sqlite3 -readonly "$DB" <<'SQL'
-WITH head AS (SELECT head_snapshot_id AS sid FROM pr WHERE id=1)
+PRID=1
+sqlite3 -readonly "$DB" <<SQL
+WITH head AS (SELECT head_snapshot_id AS sid FROM pr WHERE id=$PRID)
 SELECT gs.id, gs.symbol_key, gs.kind, gs.pkg_path, p.path, gs.start_line
 FROM go_symbol gs
 LEFT JOIN path p ON p.id = gs.path_id
@@ -140,8 +156,9 @@ SQL
 2) Then query callers by `to_symbol_id`:
 
 ```bash
-sqlite3 -readonly "$DB" <<'SQL'
-WITH head AS (SELECT head_snapshot_id AS sid FROM pr WHERE id=1),
+PRID=1
+sqlite3 -readonly "$DB" <<SQL
+WITH head AS (SELECT head_snapshot_id AS sid FROM pr WHERE id=$PRID),
 target AS (
   SELECT id FROM go_symbol
   WHERE snapshot_id = (SELECT sid FROM head)
@@ -184,7 +201,7 @@ sqlite3 -readonly "$DB" <<'SQL'
 SELECT p.path
 FROM pr_file pf
 JOIN path p ON p.id = pf.path_id
-WHERE pf.pr_id = 1
+WHERE pf.pr_id = 1 -- change this (or set PRID and substitute like above)
   AND p.path LIKE '%.go'
 ORDER BY p.path;
 SQL

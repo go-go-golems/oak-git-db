@@ -18,10 +18,24 @@ From this repo directory:
 
 ```bash
 GOCACHE=/tmp/go-build-cache go run ./cmd/oakgitdb build \
-  --repo ../geppetto \
+  --repo /path/to/target-repo \
   --base origin/main \
   --head HEAD \
-  --out /tmp/geppetto-pr.db \
+  --out /tmp/pr.db \
+  --oak-sources cmd,pkg,misc \
+  --oak-glob '*.go' \
+  --packages ./...
+```
+
+Multi-repo (one SQLite file with one PR row per repo):
+
+```bash
+GOCACHE=/tmp/go-build-cache go run ./cmd/oakgitdb build \
+  --repo /path/to/geppetto \
+  --repo /path/to/pinocchio \
+  --base origin/main \
+  --head HEAD \
+  --out /tmp/multi-pr.db \
   --oak-sources cmd,pkg,misc \
   --oak-glob '*.go' \
   --packages ./...
@@ -30,8 +44,8 @@ GOCACHE=/tmp/go-build-cache go run ./cmd/oakgitdb build \
 Then:
 
 ```bash
-sqlite3 -readonly /tmp/geppetto-pr.db ".tables"
-sqlite3 -readonly /tmp/geppetto-pr.db "select change_type,count(*) from pr_file group by change_type;"
+sqlite3 -readonly /tmp/pr.db ".tables"
+sqlite3 -readonly /tmp/pr.db "select change_type,count(*) from pr_file group by change_type;"
 ```
 
 ## Docs
