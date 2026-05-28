@@ -1,0 +1,3 @@
+package oakgitdb
+
+//go:generate go tool logcopter-gen -area-prefix go-go-golems.oak-git-db -strip-prefix github.com/go-go-golems/oak-git-db ./pkg/... ./cmd/...
