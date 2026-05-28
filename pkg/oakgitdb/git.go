@@ -111,4 +111,3 @@ func extractGitTree(ctx context.Context, repoDir string, sha string, outDir stri
 	}
 	return nil
 }
-

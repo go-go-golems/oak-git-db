@@ -20,4 +20,3 @@ func readModulePath(goModPath string) (string, error) {
 	}
 	return "", errors.Errorf("module path not found in %s", goModPath)
 }
-

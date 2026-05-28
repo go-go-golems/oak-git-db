@@ -24,9 +24,9 @@ import (
 
 type BuildOptions struct {
 	RepoDirs []string
-	BaseRef string
-	HeadRef string
-	OutPath string
+	BaseRef  string
+	HeadRef  string
+	OutPath  string
 
 	OakSources  []string
 	OakGlob     []string
@@ -352,16 +352,16 @@ func ingestGitPR(ctx context.Context, db *sql.DB, repoDir string, repoID, prID i
 	}
 	commitParts := bytes.Split(commitsRaw, []byte{0})
 	type commitRow struct {
-		SHA          string
-		Parents      string
-		AuthorName   string
-		AuthorEmail  string
-		AuthoredAt   string
-		CommitName   string
-		CommitEmail  string
-		CommittedAt  string
-		Subject      string
-		Body         string
+		SHA         string
+		Parents     string
+		AuthorName  string
+		AuthorEmail string
+		AuthoredAt  string
+		CommitName  string
+		CommitEmail string
+		CommittedAt string
+		Subject     string
+		Body        string
 	}
 	var rows []commitRow
 	for i := 0; i+9 < len(commitParts); i += 10 {
